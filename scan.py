@@ -1,9 +1,10 @@
 from dotenv import load_dotenv
 import os
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from groq import Groq
+import json
 load_dotenv()
 
 app = FastAPI()
@@ -14,15 +15,21 @@ client = Groq(
 class ImageRequest(BaseModel):
     base64_image: str
 
-def groq_stream(base64_image: str):
+def get_groq_response(base64_image: str):
     messages = [
         {
             "role": "user",
             "content": [
                 {
-                     "type": "text",
-                     "text": "analyze the image, extract the value and ONLY return this json format \n\n{\nweight: double,\nfat_mass: double,\nmuscle_mass:double,\nbone_mass:double,\nbmi:double,\nideal_body_weight:double\n}"
-                 },
+                    "type": "text",
+                    "text": (
+                        "Analyze the image and extract the following fields: "
+                        "weight, fat_percentage, fat_mass, muscle_mass, ffm, bone_mass, visceral_fat, tbw_percentage. "
+                        "Return ONLY a valid JSON object with these fields as numbers, no type annotations, no extra text, and no explanations. "
+                        "Example: {\"weight\": 70.5, \"fat_percentage\": 28.1, \"fat_mass\": 19.7, \"muscle_mass\": 39.9, "
+                        "\"ffm\": 50.8, \"bone_mass\": 2.5, \"visceral_fat\": 10, \"tbw_percentage\": 55.2}"
+                    )
+                },
                 {
                     "type": "image_url",
                     "image_url": {
@@ -41,9 +48,18 @@ def groq_stream(base64_image: str):
         stream=True,
         stop=None,
     )
+    response_text = ""
     for chunk in completion:
-        yield chunk.choices[0].delta.content or ""
+        response_text += chunk.choices[0].delta.content or ""
+    return response_text
 
 @app.post("/extract")
 async def extract(request: ImageRequest):
-    return StreamingResponse(groq_stream(request.base64_image), media_type="application/json")
+    result = get_groq_response(request.base64_image)
+    try:
+        # Try to parse the result as JSON
+        parsed = json.loads(result)
+        return JSONResponse(content=parsed)
+    except Exception:
+        # If parsing fails, return the raw string
+        return JSONResponse(content={"result": result})
